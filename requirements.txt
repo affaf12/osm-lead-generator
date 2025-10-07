@@ -1,10 +1,10 @@
 streamlit
 pandas
 aiohttp
-nest_asyncio
 requests
-geopy
-openpyxl
-streamlit-aggrid
 beautifulsoup4
 tldextract
+geopy
+nest_asyncio
+st-aggrid
+openpyxl
