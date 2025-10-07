@@ -1,30 +1,25 @@
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 import streamlit as st
 import pandas as pd
-import aiohttp
 import asyncio
-import nest_asyncio
-import re
-import time
 import requests
 import json
 import os
-import hashlib
 from io import BytesIO
-from bs4 import BeautifulSoup
-import tldextract
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
+import nest_asyncio
+
+nest_asyncio.apply()
+st.set_page_config(layout="wide", page_title="🌐 OSM Lead Dashboard")
 
 # -------------------------
 # Setup
 # -------------------------
-st.set_page_config(layout="wide", page_title="🌐 OSM Lead Dashboard")
-nest_asyncio.apply()
-geolocator = Nominatim(user_agent="StreamlitOSMPro/4.0 (muhammadaffaf746@gmail.com)")
-geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
-
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
+geolocator = Nominatim(user_agent="StreamlitOSMPro/5.0")
+geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 
 FALLBACK_COORDINATES = {
     "Rome, Italy": (41.902782, 12.496366),
@@ -34,66 +29,47 @@ FALLBACK_COORDINATES = {
 }
 
 # -------------------------
-# Custom CSS for Table
-# -------------------------
-st.markdown("""
-<style>
-.stApp {background: linear-gradient(to right, #1c1c1c, #2c3e50); color: #ffffff;}
-.stButton>button {background-color: #ffcc00; color: #000000; font-weight: bold; border-radius: 10px; padding: 0.5em 1.2em;}
-.stButton>button:hover {background-color: #ffaa00;}
-.stTextInput>div>input, .stNumberInput>div>input, .stSlider>div>input {background-color: rgba(255,255,255,0.1); color: #ffffff; border-radius: 5px; border: 1px solid #ffffff33; padding: 0.4em;}
-.dataframe tbody tr:nth-child(even) {background-color: rgba(255,255,255,0.05);}
-.dataframe tbody tr:hover {background-color: rgba(255,255,255,0.15);}
-.dataframe thead {background-color: #ffcc00; color: #000000;}
-</style>
-""", unsafe_allow_html=True)
-
-# -------------------------
 # Helper Functions
 # -------------------------
-def get_coordinates(location, retries=3):
+@st.cache_data(show_spinner=False)
+def get_coordinates(location):
     cache_file = os.path.join(CACHE_DIR, "coords.json")
     coords_cache = {}
     if os.path.exists(cache_file):
         coords_cache = json.load(open(cache_file, "r"))
     if location in coords_cache:
         return coords_cache[location]
-    for attempt in range(retries):
-        try:
-            loc = geocode(location)
-            if loc:
-                coords_cache[location] = (loc.latitude, loc.longitude)
-                json.dump(coords_cache, open(cache_file, "w"))
-                return loc.latitude, loc.longitude
-        except:
-            time.sleep(2 ** attempt)
+
+    try:
+        loc = geocode(location)
+        if loc:
+            coords_cache[location] = (loc.latitude, loc.longitude)
+            json.dump(coords_cache, open(cache_file, "w"))
+            return loc.latitude, loc.longitude
+    except:
+        pass
+
     city_only = location.split(",")[0]
-    for attempt in range(retries):
-        try:
-            loc = geocode(city_only)
-            if loc:
-                coords_cache[location] = (loc.latitude, loc.longitude)
-                json.dump(coords_cache, open(cache_file, "w"))
-                return loc.latitude, loc.longitude
-        except:
-            time.sleep(2 ** attempt)
-    if location in FALLBACK_COORDINATES:
-        return FALLBACK_COORDINATES[location]
-    st.warning(f"[WARN] Could not get coordinates for '{location}'")
-    return None
+    try:
+        loc = geocode(city_only)
+        if loc:
+            coords_cache[location] = (loc.latitude, loc.longitude)
+            json.dump(coords_cache, open(cache_file, "w"))
+            return loc.latitude, loc.longitude
+    except:
+        pass
+
+    return FALLBACK_COORDINATES.get(location, None)
 
 def score_lead(row):
     score = 0
-    if row['emails'] and len(row['emails']) > 0:
+    if row.get('emails') and row['emails'] != "N/A":
         score += 2
     for col in ['facebook','instagram','linkedin','twitter','tiktok','youtube']:
         if row.get(col) and row[col] != "N/A":
             score += 1
     return score
 
-# -------------------------
-# Async fetching
-# -------------------------
 async def fetch_osm(query, lat, lon, radius):
     overpass_url = "https://overpass-api.de/api/interpreter"
     query_text = f"""
@@ -118,34 +94,25 @@ async def fetch_osm(query, lat, lon, radius):
                 "phone": tags.get("phone", "N/A"),
                 "website": tags.get("website", "N/A"),
                 "emails": tags.get("email", "N/A"),
-                "facebook":"N/A","instagram":"N/A","linkedin":"N/A","twitter":"N/A","tiktok":"N/A","youtube":"N/A"
+                "facebook":"N/A","instagram":"N/A","linkedin":"N/A",
+                "twitter":"N/A","tiktok":"N/A","youtube":"N/A"
             })
         return results
     except:
         return []
 
-async def main_dashboard_table(country, city, queries, radius, steps):
-    coords = get_coordinates(f"{city}, {country}")
-    if not coords:
-        st.stop()
-    lat, lon = coords
+async def fetch_all_osm(queries, lat, lon, radius, steps):
     all_results = []
     for q in queries:
         for r in [radius*(i+1) for i in range(steps)]:
-            results = await fetch_osm(q, lat, lon, r)
-            all_results.extend(results)
-    if not all_results:
-        st.warning("No results found!")
-        return pd.DataFrame()
-    df = pd.DataFrame(all_results)
-    df['lead_score'] = df.apply(score_lead, axis=1)
-    df = df.sort_values('lead_score', ascending=False).reset_index(drop=True)
-    return df
+            res = await fetch_osm(q, lat, lon, r)
+            all_results.extend(res)
+    return all_results
 
 # -------------------------
-# Main Page Inputs
+# UI
 # -------------------------
-st.title("🌐 OSM Lead Generator - Table View with Search & Color Coding")
+st.title("🌐 OSM Lead Generator - AgGrid Table (Fast & Scrollable)")
 
 with st.expander("Search Parameters", expanded=True):
     col1, col2, col3 = st.columns([1,1,1])
@@ -154,53 +121,63 @@ with st.expander("Search Parameters", expanded=True):
         radius = st.number_input("Radius (meters)", value=1000, min_value=500, max_value=5000, step=100)
     with col2:
         city_input = st.text_input("City", value="Rome")
-        steps = st.number_input("Radius Steps", value=3, min_value=1, max_value=10, step=1)
+        steps = st.number_input("Radius Steps", value=2, min_value=1, max_value=10, step=1)
     with col3:
-        queries_input = st.text_input("Business Types (comma-separated)", value="cafe, restaurant, bar")
+        queries_input = st.text_input("Business Types", value="cafe, restaurant, bar")
         generate_button = st.button("Generate Leads 🚀")
 
-# -------------------------
-# Lead Table Display
-# -------------------------
 if "leads_df" not in st.session_state:
     st.session_state.leads_df = None
 
+# -------------------------
+# Generate Data
+# -------------------------
 if generate_button:
+    coords = get_coordinates(f"{city_input}, {country_input}")
+    if not coords:
+        st.warning("Could not find coordinates!")
+        st.stop()
+    lat, lon = coords
     queries = [q.strip() for q in queries_input.split(",")]
-    df = asyncio.run(main_dashboard_table(country_input, city_input, queries, radius, steps))
-    if not df.empty:
+    all_results = asyncio.run(fetch_all_osm(queries, lat, lon, radius, steps))
+    if all_results:
+        df = pd.DataFrame(all_results)
+        df['lead_score'] = df.apply(score_lead, axis=1)
+        df = df.sort_values('lead_score', ascending=False).reset_index(drop=True)
         st.session_state.leads_df = df
     else:
+        st.warning("No results found!")
         st.session_state.leads_df = None
 
+# -------------------------
+# Display AgGrid Table
+# -------------------------
 if st.session_state.leads_df is not None:
     st.subheader(f"🌟 Leads for {city_input}, {country_input}")
 
-    # Filters: Lead score + Search
+    # Filters
     min_score = st.slider("Minimum Lead Score", 0, 10, 1)
     search_text = st.text_input("Search by Name or Website", value="").lower()
 
     filtered_df = st.session_state.leads_df[st.session_state.leads_df['lead_score'] >= min_score]
     if search_text:
-        filtered_df = filtered_df[filtered_df['name'].str.lower().str.contains(search_text) |
-                                  filtered_df['website'].str.lower().str.contains(search_text)]
+        filtered_df = filtered_df[
+            filtered_df['name'].str.lower().str.contains(search_text) |
+            filtered_df['website'].str.lower().str.contains(search_text)
+        ]
 
-    # Color coding function
-    def color_lead_score(val):
-        if val >= 5:
-            color = 'background-color: #00ff99; color: black; font-weight:bold'
-        elif val >= 3:
-            color = 'background-color: #ffff66; color: black; font-weight:bold'
-        else:
-            color = 'background-color: #ff5555; color: black; font-weight:bold'
-        return color
+    # AgGrid options
+    gb = GridOptionsBuilder.from_dataframe(filtered_df)
+    gb.configure_pagination(paginationAutoPageSize=True)
+    gb.configure_side_bar()
+    gb.configure_default_column(editable=False, filter=True, sortable=True)
+    gb.configure_column("lead_score", cellStyle=lambda x: {'color': 'black', 
+                                                         'backgroundColor': '#00ff99' if x >=5 else '#ffff66' if x >=3 else '#ff5555',
+                                                         'fontWeight':'bold'})
+    gridOptions = gb.build()
+    AgGrid(filtered_df, gridOptions=gridOptions, height=500, fit_columns_on_grid_load=True, update_mode=GridUpdateMode.SELECTION_CHANGED)
 
-    st.dataframe(
-        filtered_df.style.applymap(color_lead_score, subset=['lead_score']),
-        use_container_width=True
-    )
-
-    # Excel Download
+    # Download
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         filtered_df.to_excel(writer, index=False)
