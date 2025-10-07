@@ -6,3 +6,4 @@ requests
 geopy
 openpyxl
 streamlit-aggrid
+beautifulsoup4
