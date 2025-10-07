@@ -1,11 +1,20 @@
-streamlit==1.38.0
-pandas==2.2.2
+# --- Core ---
+streamlit==1.39.0
+pandas==2.2.3
 requests==2.32.3
-nest_asyncio==1.6.0
-folium==0.17.0
-tldextract==5.1.2
-geopy==2.4.1
-streamlit-folium==0.20.0
 beautifulsoup4==4.12.3
-st-aggrid==1.0.5
+
+# --- Geolocation ---
+geopy==2.4.1
+tldextract==5.1.2
+folium==0.17.0
+streamlit-folium==0.21.1
+
+# --- Grid / Table ---
+st-aggrid==1.1.0
+
+# --- Excel Export ---
 openpyxl==3.1.5
+
+# --- Optional but helpful (fast startup, caching, misc) ---
+python-dateutil==2.9.0.post0
