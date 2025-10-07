@@ -10,6 +10,8 @@ from bs4 import BeautifulSoup
 import tldextract
 from geopy.distance import geodesic
 from geopy.geocoders import Nominatim
+import requests
+import os
 
 nest_asyncio.apply()
 geolocator = Nominatim(user_agent="StreamlitOSMPro/1.1")
@@ -18,7 +20,6 @@ geolocator = Nominatim(user_agent="StreamlitOSMPro/1.1")
 # Helper functions
 # -------------------------
 def get_coordinates(location, retries=3):
-    import requests
     url = "https://nominatim.openstreetmap.org/search"
     params = {"q": location, "format": "json", "limit": 1}
     for attempt in range(retries):
@@ -34,34 +35,13 @@ def get_coordinates(location, retries=3):
                 return None
     return None
 
-def geocode_address(address):
-    try:
-        loc = geolocator.geocode(address, timeout=10)
-        if loc:
-            return loc.latitude, loc.longitude
-    except:
-        return None, None
-    return None, None
-
 def filter_valid_emails(emails):
     invalid_prefixes = ["info@", "noreply@", "admin@", "support@", "no-reply@", "contact@"]
     valid = [e for e in emails if not any(e.lower().startswith(p) for p in invalid_prefixes)]
     valid = [e for e in valid if "." in e.split("@")[-1]]
     return valid
 
-def categorize_email(email):
-    domain = email.split("@")[-1].lower()
-    if "gmail.com" in domain:
-        return "gmail"
-    elif "yahoo.com" in domain:
-        return "yahoo"
-    elif domain.endswith((".com", ".net", ".org")):
-        return "corporate"
-    else:
-        return "other"
-
 async def fetch_osm(query, lat, lon, radius, retries=3):
-    import requests
     overpass_url = "https://overpass-api.de/api/interpreter"
     overpass_query = f"""
     [out:json][timeout:60];
@@ -151,37 +131,66 @@ async def gather_website_data(websites, concurrency=5):
 
 def deduplicate_by_domain(df):
     df['domain'] = df['website'].apply(lambda x: tldextract.extract(x).domain if x not in ["N/A", None] else None)
-    df = df.sort_values(['email_count', 'name'], ascending=[False, True])
+    df = df.sort_values(['name'], ascending=True)
     df = df.drop_duplicates(subset=['domain'])
     df.drop(columns=['domain'], inplace=True)
     return df
 
-def score_leads(row):
-    score = 0
-    score += row['email_count'] * 2
-    score += sum([1 for col in ['facebook','instagram','linkedin','twitter','tiktok','youtube'] if col in row and row[col] != "N/A"])
-    if row['missing_website']=="No":
-        score += 2
-    if 'distance_km' in row and row['distance_km']:
-        score += max(0, 10 - row['distance_km'])
-    return score
+# -------------------------
+# Main OSM function
+# -------------------------
+async def main_osm(cities, queries, radius_list, max_distance, concurrency):
+    all_results = []
+
+    for city in cities:
+        coords = get_coordinates(city)
+        if not coords:
+            st.warning(f"Could not get coordinates for {city}")
+            continue
+        lat, lon = coords
+        for query in queries:
+            for r in radius_list:
+                st.info(f"Fetching {query} in {city} with radius {r}m...")
+                results = await fetch_osm(query, lat, lon, r)
+                all_results.extend(results)
+
+    if not all_results:
+        st.warning("No results found!")
+        return None
+
+    df = pd.DataFrame(all_results)
+
+    # Gather website emails/social links
+    websites = df['website'].tolist()
+    emails_list, social_list = await gather_website_data(websites, concurrency)
+    df['emails'] = emails_list
+    for social in ['facebook','instagram','linkedin','twitter','tiktok','youtube']:
+        df[social] = [s.get(social, "N/A") for s in social_list]
+
+    df = deduplicate_by_domain(df)
+
+    # Save to Excel
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"OSM_Leads_{timestamp}.xlsx"
+    df.to_excel(filename, index=False)
+    return filename
 
 # -------------------------
-# Main Streamlit app
+# Streamlit UI
 # -------------------------
 st.title("🌐 OSM Pro Lead Generator")
 
-cities_input = st.text_input("Enter Cities (comma separated)", "Rome, Milan")
-queries_input = st.text_input("Enter Business Types (comma separated)", "cafe, restaurant, bar")
-radius = st.number_input("Radius (meters)", 1000, 500, 5000, step=100)
-steps = st.number_input("Radius Steps", 3, 1, 10)
-max_distance = st.number_input("Max Distance (km)", 10, 1, 50)
-concurrency = st.number_input("Concurrent Requests", 5, 1, 20)
+cities_input = st.text_input("Enter Cities (comma separated)", value="Rome, Milan")
+queries_input = st.text_input("Enter Business Types (comma separated)", value="cafe, restaurant, bar")
+radius = st.number_input("Radius (meters)", value=1000, min_value=500, max_value=5000, step=100)
+steps = st.number_input("Radius Steps", value=3, min_value=1, max_value=10)
+max_distance = st.number_input("Max Distance (km)", value=10, min_value=1, max_value=50)
+concurrency = st.number_input("Concurrent Requests", value=5, min_value=1, max_value=20)
 
 if st.button("Start Lead Generation 🚀"):
     st.info("Lead generation started. This may take a while...")
 
-    async def run_streamlit():
+    async def run_osm_task():
         cities = [c.strip() for c in cities_input.split(",")]
         queries = [q.strip() for q in queries_input.split(",")]
         radius_list = [radius * (i+1) for i in range(steps)]
@@ -192,4 +201,4 @@ if st.button("Start Lead Generation 🚀"):
             with open(filename, "rb") as f:
                 st.download_button("Download Excel File", f, file_name=filename)
 
-    asyncio.run(run_streamlit())
+    asyncio.create_task(run_osm_task())
