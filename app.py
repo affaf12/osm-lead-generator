@@ -1,4 +1,3 @@
-# app_dashboard.py - OSM Lead Generator with Dashboard UI
 import streamlit as st
 import pandas as pd
 import aiohttp
@@ -21,7 +20,7 @@ from geopy.extra.rate_limiter import RateLimiter
 # -------------------------
 st.set_page_config(layout="wide", page_title="🌐 OSM Lead Dashboard")
 nest_asyncio.apply()
-geolocator = Nominatim(user_agent="StreamlitOSMPro/2.0 (muhammadaffaf746@gmail.com)")
+geolocator = Nominatim(user_agent="StreamlitOSMPro/4.0 (muhammadaffaf746@gmail.com)")
 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 
 CACHE_DIR = "cache"
@@ -35,47 +34,19 @@ FALLBACK_COORDINATES = {
 }
 
 # -------------------------
-# Custom CSS for Dashboard Theme
+# Custom CSS for Table
 # -------------------------
-st.markdown(
-    """
-    <style>
-    .stApp {
-        background: linear-gradient(to right, #0f2027, #203a43, #2c5364);
-        color: #ffffff;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    }
-    .stButton>button {
-        background-color: #ffcc00;
-        color: #000000;
-        font-weight: bold;
-        border-radius: 10px;
-        padding: 0.5em 1.2em;
-    }
-    .stButton>button:hover {
-        background-color: #ffaa00;
-    }
-    .stTextInput>div>input, .stNumberInput>div>input {
-        background-color: rgba(255,255,255,0.1);
-        color: #ffffff;
-        border-radius: 5px;
-        border: 1px solid #ffffff33;
-        padding: 0.4em;
-    }
-    .lead-card {
-        background-color: rgba(255,255,255,0.05);
-        border-radius: 15px;
-        padding: 10px;
-        margin-bottom: 10px;
-        box-shadow: 1px 1px 10px rgba(0,0,0,0.5);
-    }
-    .lead-score-high {color: #00ff99; font-weight: bold;}
-    .lead-score-medium {color: #ffff66; font-weight: bold;}
-    .lead-score-low {color: #ff5555; font-weight: bold;}
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+st.markdown("""
+<style>
+.stApp {background: linear-gradient(to right, #1c1c1c, #2c3e50); color: #ffffff;}
+.stButton>button {background-color: #ffcc00; color: #000000; font-weight: bold; border-radius: 10px; padding: 0.5em 1.2em;}
+.stButton>button:hover {background-color: #ffaa00;}
+.stTextInput>div>input, .stNumberInput>div>input, .stSlider>div>input {background-color: rgba(255,255,255,0.1); color: #ffffff; border-radius: 5px; border: 1px solid #ffffff33; padding: 0.4em;}
+.dataframe tbody tr:nth-child(even) {background-color: rgba(255,255,255,0.05);}
+.dataframe tbody tr:hover {background-color: rgba(255,255,255,0.15);}
+.dataframe thead {background-color: #ffcc00; color: #000000;}
+</style>
+""", unsafe_allow_html=True)
 
 # -------------------------
 # Helper Functions
@@ -111,19 +82,6 @@ def get_coordinates(location, retries=3):
     st.warning(f"[WARN] Could not get coordinates for '{location}'")
     return None
 
-def filter_valid_emails(emails):
-    invalid_prefixes = ["info@", "noreply@", "admin@", "support@", "no-reply@", "contact@"]
-    valid = [e for e in emails if not any(e.lower().startswith(p) for p in invalid_prefixes)]
-    valid = [e for e in valid if "." in e.split("@")[-1]]
-    return valid
-
-def deduplicate_by_domain(df):
-    df['domain'] = df['website'].apply(lambda x: tldextract.extract(x).domain if x not in ["N/A", None] else None)
-    df = df.sort_values(['lead_score'], ascending=False)
-    df = df.drop_duplicates(subset=['domain'])
-    df.drop(columns=['domain'], inplace=True)
-    return df
-
 def score_lead(row):
     score = 0
     if row['emails'] and len(row['emails']) > 0:
@@ -134,7 +92,7 @@ def score_lead(row):
     return score
 
 # -------------------------
-# Async fetching functions
+# Async fetching
 # -------------------------
 async def fetch_osm(query, lat, lon, radius):
     overpass_url = "https://overpass-api.de/api/interpreter"
@@ -159,67 +117,14 @@ async def fetch_osm(query, lat, lon, radius):
                 "longitude": element.get("lon") or element.get("center", {}).get("lon"),
                 "phone": tags.get("phone", "N/A"),
                 "website": tags.get("website", "N/A"),
-                "original_email": tags.get("email", "N/A"),
-                "address": tags.get("addr:full", tags.get("addr:street", ""))
+                "emails": tags.get("email", "N/A"),
+                "facebook":"N/A","instagram":"N/A","linkedin":"N/A","twitter":"N/A","tiktok":"N/A","youtube":"N/A"
             })
         return results
     except:
         return []
 
-async def fetch_website_data(session, website_url):
-    if website_url in ["N/A", None]:
-        return [], {k:"N/A" for k in ["facebook","instagram","linkedin","twitter","tiktok","youtube"]}
-    hash_name = hashlib.md5(website_url.encode()).hexdigest()
-    cache_file = os.path.join(CACHE_DIR, f"{hash_name}.json")
-    if os.path.exists(cache_file):
-        cached = json.load(open(cache_file, "r"))
-        return cached["emails"], cached["social"]
-    social_domains = ["facebook.com","instagram.com","linkedin.com","twitter.com","tiktok.com","youtube.com"]
-    social_links = {domain.split('.')[0]: "N/A" for domain in social_domains}
-    emails = []
-    urls_to_check = [website_url]
-    for page_url in urls_to_check:
-        try:
-            async with session.get(page_url, timeout=10) as response:
-                text = await response.text()
-                emails += re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text)
-                soup = BeautifulSoup(text, "html.parser")
-                for a in soup.find_all("a", href=True):
-                    href = a['href']
-                    for domain in social_domains:
-                        if domain in href:
-                            social_links[domain.split('.')[0]] = href
-                    if "contact" in href.lower() or "about" in href.lower():
-                        if href.startswith("/"):
-                            ext = tldextract.extract(website_url)
-                            href = f"https://{ext.domain}.{ext.suffix}{href}"
-                        if href not in urls_to_check:
-                            urls_to_check.append(href)
-        except:
-            continue
-    emails = list(set(filter_valid_emails(emails)))
-    json.dump({"emails": emails, "social": social_links}, open(cache_file, "w"))
-    return emails, social_links
-
-async def gather_website_data_dashboard(websites, concurrency=5):
-    sem = asyncio.Semaphore(concurrency)
-    df_live = pd.DataFrame(columns=['name','website','emails','facebook','instagram','linkedin','twitter','tiktok','youtube','lead_score'])
-
-    async def sem_fetch(session, site):
-        async with sem:
-            emails, social = await fetch_website_data(session, site['website'])
-            site['emails'] = ", ".join(emails) if emails else "N/A"
-            site.update(social)
-            site['lead_score'] = score_lead(site)
-            nonlocal df_live
-            df_live = pd.concat([df_live, pd.DataFrame([site])], ignore_index=True)
-    async with aiohttp.ClientSession() as session:
-        tasks = [sem_fetch(session, w) for w in websites]
-        await asyncio.gather(*tasks)
-    df_live = df_live.sort_values('lead_score', ascending=False).reset_index(drop=True)
-    return df_live
-
-async def main_dashboard(country, city, queries, radius, steps, concurrency):
+async def main_dashboard_table(country, city, queries, radius, steps):
     coords = get_coordinates(f"{city}, {country}")
     if not coords:
         st.stop()
@@ -232,30 +137,37 @@ async def main_dashboard(country, city, queries, radius, steps, concurrency):
     if not all_results:
         st.warning("No results found!")
         return pd.DataFrame()
-    df = await gather_website_data_dashboard(all_results, concurrency)
+    df = pd.DataFrame(all_results)
+    df['lead_score'] = df.apply(score_lead, axis=1)
+    df = df.sort_values('lead_score', ascending=False).reset_index(drop=True)
     return df
 
 # -------------------------
-# Sidebar Filters
+# Main Page Inputs
 # -------------------------
-st.sidebar.header("Search Parameters")
-country_input = st.sidebar.text_input("Country", value="Italy")
-city_input = st.sidebar.text_input("City", value="Rome")
-queries_input = st.sidebar.text_input("Business Types", value="cafe, restaurant, bar")
-radius = st.sidebar.number_input("Radius (meters)", value=1000, min_value=500, max_value=5000, step=100)
-steps = st.sidebar.number_input("Radius Steps", value=3, min_value=1, max_value=10, step=1)
-concurrency = st.sidebar.number_input("Concurrent Requests", value=5, min_value=1, max_value=20, step=1)
-generate_button = st.sidebar.button("Generate Leads 🚀")
+st.title("🌐 OSM Lead Generator - Table View with Search & Color Coding")
+
+with st.expander("Search Parameters", expanded=True):
+    col1, col2, col3 = st.columns([1,1,1])
+    with col1:
+        country_input = st.text_input("Country", value="Italy")
+        radius = st.number_input("Radius (meters)", value=1000, min_value=500, max_value=5000, step=100)
+    with col2:
+        city_input = st.text_input("City", value="Rome")
+        steps = st.number_input("Radius Steps", value=3, min_value=1, max_value=10, step=1)
+    with col3:
+        queries_input = st.text_input("Business Types (comma-separated)", value="cafe, restaurant, bar")
+        generate_button = st.button("Generate Leads 🚀")
 
 # -------------------------
-# Main Dashboard Display
+# Lead Table Display
 # -------------------------
 if "leads_df" not in st.session_state:
     st.session_state.leads_df = None
 
 if generate_button:
     queries = [q.strip() for q in queries_input.split(",")]
-    df = asyncio.run(main_dashboard(country_input, city_input, queries, radius, steps, concurrency))
+    df = asyncio.run(main_dashboard_table(country_input, city_input, queries, radius, steps))
     if not df.empty:
         st.session_state.leads_df = df
     else:
@@ -263,28 +175,30 @@ if generate_button:
 
 if st.session_state.leads_df is not None:
     st.subheader(f"🌟 Leads for {city_input}, {country_input}")
-    # Filter by lead score
-    min_score = st.sidebar.slider("Minimum Lead Score", 0, 10, 1)
-    filtered_df = st.session_state.leads_df[st.session_state.leads_df['lead_score'] >= min_score]
 
-    for idx, row in filtered_df.iterrows():
-        score_class = "lead-score-low"
-        if row['lead_score'] >= 5:
-            score_class = "lead-score-high"
-        elif row['lead_score'] >= 3:
-            score_class = "lead-score-medium"
-        st.markdown(
-            f"""
-            <div class="lead-card">
-                <b>{row['name']}</b> (<span class="{score_class}">Score: {row['lead_score']}</span>)<br>
-                🌐 <a href="{row['website']}" target="_blank">{row['website']}</a><br>
-                📧 {row['emails']}<br>
-                📞 {row['phone']}<br>
-                🔗 {row['facebook']} | {row['instagram']} | {row['linkedin']} | {row['twitter']} | {row['tiktok']} | {row['youtube']}<br>
-                📍 {row['address']}
-            </div>
-            """, unsafe_allow_html=True
-        )
+    # Filters: Lead score + Search
+    min_score = st.slider("Minimum Lead Score", 0, 10, 1)
+    search_text = st.text_input("Search by Name or Website", value="").lower()
+
+    filtered_df = st.session_state.leads_df[st.session_state.leads_df['lead_score'] >= min_score]
+    if search_text:
+        filtered_df = filtered_df[filtered_df['name'].str.lower().str.contains(search_text) |
+                                  filtered_df['website'].str.lower().str.contains(search_text)]
+
+    # Color coding function
+    def color_lead_score(val):
+        if val >= 5:
+            color = 'background-color: #00ff99; color: black; font-weight:bold'
+        elif val >= 3:
+            color = 'background-color: #ffff66; color: black; font-weight:bold'
+        else:
+            color = 'background-color: #ff5555; color: black; font-weight:bold'
+        return color
+
+    st.dataframe(
+        filtered_df.style.applymap(color_lead_score, subset=['lead_score']),
+        use_container_width=True
+    )
 
     # Excel Download
     output = BytesIO()
