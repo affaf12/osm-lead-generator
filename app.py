@@ -8,7 +8,6 @@ import re
 from datetime import datetime
 from bs4 import BeautifulSoup
 import tldextract
-from geopy.distance import geodesic
 from geopy.geocoders import Nominatim
 import requests
 
@@ -117,6 +116,7 @@ async def fetch_website_data(session, website_url, retries=2):
                 async with session.get(page_url, timeout=10) as response:
                     text = await response.text()
                     emails += re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text)
+                    from bs4 import BeautifulSoup
                     soup = BeautifulSoup(text, "html.parser")
                     for a in soup.find_all("a", href=True):
                         href = a['href']
@@ -137,42 +137,64 @@ async def fetch_website_data(session, website_url, retries=2):
     emails = list(set(filter_valid_emails(emails)))
     return emails, social_links
 
-async def gather_website_data(websites, concurrency=5):
+async def gather_website_data(websites, progress_bar, status_text, concurrency=5):
     sem = asyncio.Semaphore(concurrency)
-    async def sem_fetch(session, url):
+    emails_list, social_list = [], []
+
+    async def sem_fetch(session, url, idx):
         async with sem:
-            return await fetch_website_data(session, url)
+            result = await fetch_website_data(session, url)
+            emails_list.append(result[0])
+            social_list.append(result[1])
+            progress_bar.progress((idx + 1) / len(websites))
+            status_text.text(f"Scraping websites... ({idx + 1}/{len(websites)})")
+            return result
+
     async with aiohttp.ClientSession() as session:
-        tasks = [sem_fetch(session, w) for w in websites]
-        results = await asyncio.gather(*tasks)
-    emails_list = [r[0] for r in results]
-    social_list = [r[1] for r in results]
+        tasks = [sem_fetch(session, w, i) for i, w in enumerate(websites)]
+        await asyncio.gather(*tasks)
+
     return emails_list, social_list
 
 # -------------------------
-# Main OSM processing
+# Main OSM processing with dual progress
 # -------------------------
-async def main_osm(cities, queries, radius_list, concurrency):
+async def main_osm(country, city, queries, radius_list, concurrency):
     all_results = []
-    for city in cities:
-        coords = get_coordinates(city)
-        if not coords:
-            st.warning(f"Could not get coordinates for {city}")
-            continue
-        lat, lon = coords
-        for query in queries:
-            for r in radius_list:
-                st.info(f"Fetching {query} in {city} with radius {r}m...")
-                results = await fetch_osm(query, lat, lon, r)
-                all_results.extend(results)
-    
+
+    # OSM fetch progress
+    total_tasks = len(queries) * len(radius_list)
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    task_count = 0
+
+    location = f"{city}, {country}"
+    coords = get_coordinates(location)
+    if not coords:
+        st.warning(f"Could not get coordinates for {location}")
+        return None
+    lat, lon = coords
+
+    for query in queries:
+        for r in radius_list:
+            task_count += 1
+            status_text.text(f"Fetching {query} in {city} with radius {r}m... ({task_count}/{total_tasks})")
+            results = await fetch_osm(query, lat, lon, r)
+            all_results.extend(results)
+            progress_bar.progress(task_count / total_tasks)
+
     if not all_results:
         st.warning("No results found!")
         return None
 
     df = pd.DataFrame(all_results)
     websites = df['website'].tolist()
-    emails_list, social_list = await gather_website_data(websites, concurrency)
+
+    # Website scraping progress
+    progress_bar.progress(0)
+    status_text.text("Scraping websites for emails and social links...")
+    emails_list, social_list = await gather_website_data(websites, progress_bar, status_text, concurrency)
+
     df['emails'] = emails_list
     for social in ['facebook','instagram','linkedin','twitter','tiktok','youtube']:
         df[social] = [s.get(social, "N/A") for s in social_list]
@@ -180,33 +202,39 @@ async def main_osm(cities, queries, radius_list, concurrency):
     df = deduplicate_by_domain(df)
     df['lead_score'] = df.apply(score_lead, axis=1)
 
-    # Save Excel
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"OSM_Leads_{timestamp}.xlsx"
-    df.to_excel(filename, index=False)
-    return filename
+    status_text.text("✅ Lead generation complete!")
+    progress_bar.progress(1.0)
+    return df
 
 # -------------------------
 # Streamlit UI
 # -------------------------
 st.title("🌐 OSM Pro Lead Generator")
 
-cities_input = st.text_input("Enter Cities (comma separated)", value="Rome, Milan")
+country_input = st.text_input("Enter Country Name", value="Italy")
+city_input = st.text_input("Enter City Name", value="Rome")
 queries_input = st.text_input("Enter Business Types (comma separated)", value="cafe, restaurant, bar")
 radius = st.number_input("Radius (meters)", value=1000, min_value=500, max_value=5000, step=100)
 steps = st.number_input("Radius Steps", value=3, min_value=1, max_value=10)
 concurrency = st.number_input("Concurrent Requests", value=5, min_value=1, max_value=20)
 
-if st.button("Start Lead Generation 🚀"):
-    st.info("Lead generation started. This may take a while...")
+if "leads_df" not in st.session_state:
+    st.session_state.leads_df = None
 
-    # Use asyncio.run() safely with nest_asyncio
-    cities = [c.strip() for c in cities_input.split(",")]
-    queries = [q.strip() for q in queries_input.split(",")]
+if st.button("Generate Leads 🚀"):
     radius_list = [radius * (i+1) for i in range(steps)]
+    queries = [q.strip() for q in queries_input.split(",")]
+    df = asyncio.run(main_osm(country_input, city_input, queries, radius_list, concurrency))
+    if df is not None and not df.empty:
+        st.session_state.leads_df = df
+        st.success(f"✅ {len(df)} leads found!")
+        st.dataframe(df)
+    else:
+        st.warning("No leads found!")
 
-    filename = asyncio.run(main_osm(cities, queries, radius_list, concurrency))
-    if filename:
-        st.success(f"✅ File ready: {filename}")
-        with open(filename, "rb") as f:
-            st.download_button("Download Excel File", f, file_name=filename)
+if st.session_state.leads_df is not None:
+    st.download_button(
+        "Download Excel File",
+        st.session_state.leads_df.to_excel(index=False),
+        file_name=f"OSM_Leads_{city_input}.xlsx"
+    )
