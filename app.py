@@ -12,14 +12,20 @@ from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 import time
 import requests
-from io import BytesIO  # <- For in-memory Excel
+from io import BytesIO
+import hashlib
+import json
+import os
 
 # -------------------------
 # Setup
 # -------------------------
 nest_asyncio.apply()
-geolocator = Nominatim(user_agent="StreamlitOSMPro/1.1 (muhammadaffaf746@gmail.com)")
+geolocator = Nominatim(user_agent="StreamlitOSMPro/1.2 (muhammadaffaf746@gmail.com)")
 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+
+CACHE_DIR = "cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 # -------------------------
 # Permanent coordinates fallback
@@ -29,17 +35,27 @@ FALLBACK_COORDINATES = {
     "Milan, Italy": (45.464203, 9.189982),
     "London, UK": (51.507351, -0.127758),
     "Paris, France": (48.856613, 2.352222),
-    # Add more cities as needed
 }
 
 # -------------------------
 # Helper functions
 # -------------------------
 def get_coordinates(location, retries=3):
+    # Try to use cached coordinates first
+    cache_file = os.path.join(CACHE_DIR, "coords.json")
+    coords_cache = {}
+    if os.path.exists(cache_file):
+        coords_cache = json.load(open(cache_file, "r"))
+
+    if location in coords_cache:
+        return coords_cache[location]
+
     for attempt in range(retries):
         try:
             loc = geocode(location)
             if loc:
+                coords_cache[location] = (loc.latitude, loc.longitude)
+                json.dump(coords_cache, open(cache_file, "w"))
                 return loc.latitude, loc.longitude
         except:
             time.sleep(2 ** attempt)
@@ -49,6 +65,8 @@ def get_coordinates(location, retries=3):
         try:
             loc = geocode(city_only)
             if loc:
+                coords_cache[location] = (loc.latitude, loc.longitude)
+                json.dump(coords_cache, open(cache_file, "w"))
                 return loc.latitude, loc.longitude
         except:
             time.sleep(2 ** attempt)
@@ -127,12 +145,21 @@ async def fetch_osm(query, lat, lon, radius, retries=3):
     return []
 
 async def fetch_website_data(session, website_url, retries=2):
+    if website_url in ["N/A", None]:
+        return [], {"facebook":"N/A","instagram":"N/A","linkedin":"N/A","twitter":"N/A","tiktok":"N/A","youtube":"N/A"}
+
+    # Check cache first
+    hash_name = hashlib.md5(website_url.encode()).hexdigest()
+    cache_file = os.path.join(CACHE_DIR, f"{hash_name}.json")
+    if os.path.exists(cache_file):
+        cached = json.load(open(cache_file, "r"))
+        return cached["emails"], cached["social"]
+
     social_domains = ["facebook.com","instagram.com","linkedin.com","twitter.com","tiktok.com","youtube.com"]
     social_links = {domain.split('.')[0]: "N/A" for domain in social_domains}
     emails = []
-    if website_url in ["N/A", None]:
-        return emails, social_links
     urls_to_check = [website_url]
+
     for page_url in urls_to_check:
         for attempt in range(retries):
             try:
@@ -156,7 +183,11 @@ async def fetch_website_data(session, website_url, retries=2):
                     break
             except:
                 continue
+
     emails = list(set(filter_valid_emails(emails)))
+
+    # Save to cache
+    json.dump({"emails": emails, "social": social_links}, open(cache_file, "w"))
     return emails, social_links
 
 async def gather_website_data(websites, progress_bar, status_text, concurrency=5):
@@ -179,11 +210,10 @@ async def gather_website_data(websites, progress_bar, status_text, concurrency=5
     return emails_list, social_list
 
 # -------------------------
-# Main OSM processing with dual progress
+# Main OSM processing
 # -------------------------
 async def main_osm(country, city, queries, radius_list, concurrency):
     all_results = []
-
     total_tasks = len(queries) * len(radius_list)
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -217,6 +247,9 @@ async def main_osm(country, city, queries, radius_list, concurrency):
     df['emails'] = emails_list
     for social in ['facebook','instagram','linkedin','twitter','tiktok','youtube']:
         df[social] = [s.get(social, "N/A") for s in social_list]
+
+    # --- Remove rows with no valid emails ---
+    df = df[df['emails'].apply(lambda x: x is not None and len(x) > 0)]
 
     df = deduplicate_by_domain(df)
     df['lead_score'] = df.apply(score_lead, axis=1)
@@ -252,12 +285,10 @@ if st.button("Generate Leads 🚀"):
         st.warning("No leads found!")
 
 if st.session_state.leads_df is not None:
-    # ------------------- Fix: Write Excel to BytesIO -------------------
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         st.session_state.leads_df.to_excel(writer, index=False)
     processed_data = output.getvalue()
-
     st.download_button(
         "Download Excel File",
         processed_data,
