@@ -13,7 +13,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 # -------------------------
 # Setup
 # -------------------------
-nest_asyncio.apply()
+nest_asyncio.apply()  # allows asyncio inside Streamlit
 st.set_page_config(layout="wide", page_title="🌐 OSM Lead Dashboard")
 
 CACHE_DIR = "cache"
@@ -137,7 +137,11 @@ if generate_button:
         st.stop()
     lat, lon = coords
     queries = [q.strip() for q in queries_input.split(",")]
-    all_results = asyncio.run(fetch_all_osm(queries, lat, lon, radius, steps))
+
+    # ✅ Proper async call inside Streamlit
+    loop = asyncio.get_event_loop()
+    all_results = loop.run_until_complete(fetch_all_osm(queries, lat, lon, radius, steps))
+
     if all_results:
         df = pd.DataFrame(all_results)
         df['lead_score'] = df.apply(score_lead, axis=1)
