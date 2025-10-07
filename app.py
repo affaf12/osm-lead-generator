@@ -20,19 +20,30 @@ geolocator = Nominatim(user_agent="StreamlitOSMPro/1.1")
 # -------------------------
 # Helper functions
 # -------------------------
-def get_coordinates(location, retries=3):
+def get_coordinates(location, retries=5):
+    """
+    Get latitude and longitude for a location using Nominatim OSM API.
+    Includes retries, exponential backoff, and proper User-Agent.
+    """
     url = "https://nominatim.openstreetmap.org/search"
+    headers = {"User-Agent": "StreamlitOSMPro/1.1 (your_email@example.com)"}
     params = {"q": location, "format": "json", "limit": 1}
+
     for attempt in range(retries):
         try:
-            response = requests.get(url, params=params, headers={"User-Agent": "StreamlitOSMPro/1.1"}, timeout=10)
+            response = requests.get(url, params=params, headers=headers, timeout=15)
+            response.raise_for_status()
             data = response.json()
             if data:
                 return float(data[0]["lat"]), float(data[0]["lon"])
-        except:
+        except requests.exceptions.RequestException as e:
             if attempt < retries - 1:
-                import time; time.sleep(2)
+                import time
+                wait = 2 ** attempt
+                print(f"Attempt {attempt+1} failed. Retrying in {wait}s...")
+                time.sleep(wait)
             else:
+                print(f"Failed to get coordinates for '{location}': {e}")
                 return None
     return None
 
