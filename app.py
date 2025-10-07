@@ -1,10 +1,10 @@
-# app_pro_v7.py
 """
-🌍 OSM Pro Lead Generator — v7
-Upgrades:
- - ✅ Google Maps Integration (View on Map + Cluster View)
- - ✅ Email Verification (Offline / Mock)
- - All v6 features retained
+🌍 OSM Pro Lead Generator — v7 (Final Cloud-Compatible)
+✅ Fixes:
+ - JsCode serialization (Streamlit Cloud safe)
+ - Updated st_aggrid import (v1.0.4+)
+ - Improved cache + requirements compatibility
+ - Clean Excel download + Google Maps + Email Verification
 """
 
 import os
@@ -12,25 +12,28 @@ import re
 import json
 import hashlib
 import asyncio
+import socket
 from io import BytesIO
-import requests
+
 import pandas as pd
+import requests
 import streamlit as st
 import nest_asyncio
 import aiohttp
 import folium
-import socket
 import tldextract
 from streamlit_folium import st_folium
 from bs4 import BeautifulSoup
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
+from st_aggrid.shared import JsCode
 from folium.plugins import MarkerCluster
 
+# ---------------- Setup ----------------
 nest_asyncio.apply()
-
 st.set_page_config(page_title="🌍 OSM Pro Lead Generator (v7)", layout="wide")
+
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -61,10 +64,7 @@ def _load_cache(key: str):
 def geocode_cached(location: str):
     try:
         path = _cache_file_key("coords")
-        if os.path.exists(path):
-            d = json.load(open(path))
-        else:
-            d = {}
+        d = json.load(open(path)) if os.path.exists(path) else {}
         if location in d:
             return tuple(d[location])
         loc = geocode(location)
@@ -94,7 +94,7 @@ def verify_email(email: str):
         return "invalid"
     domain = email.split("@")[1]
     try:
-        socket.getaddrinfo(domain, 25)  # MX-like lookup
+        socket.getaddrinfo(domain, 25)
         if any(x in email.lower() for x in ["info@", "support@", "no-reply@", "noreply@"]):
             return "risky"
         return "valid"
@@ -139,7 +139,9 @@ def fetch_overpass(query: str, lat: float, lon: float, radius: int):
             "website": tags.get("website", "N/A"),
             "emails": tags.get("email", "N/A"),
             "phone": tags.get("phone", "N/A"),
-            "address": ", ".join([tags.get(k) for k in ("addr:housenumber","addr:street","addr:city","addr:postcode") if tags.get(k)]) or tags.get("addr:full", "N/A"),
+            "address": ", ".join(
+                [tags.get(k) for k in ("addr:housenumber","addr:street","addr:city","addr:postcode") if tags.get(k)]
+            ) or tags.get("addr:full", "N/A"),
             "latitude": lat_el,
             "longitude": lon_el,
         })
@@ -187,7 +189,6 @@ if generate:
         st.warning("No results found.")
         st.stop()
 
-    # Normalize and verify
     df["website"] = df["website"].astype(str).replace({"None": "N/A"})
     df["website"] = df["website"].apply(lambda u: normalize_url(u) or "N/A")
 
@@ -196,7 +197,6 @@ if generate:
     else:
         df["email_status"] = "unchecked"
 
-    # Add Google Maps link
     df["google_maps"] = df.apply(
         lambda r: f"https://www.google.com/maps?q={r['latitude']},{r['longitude']}"
         if pd.notna(r["latitude"]) and pd.notna(r["longitude"]) else "N/A",
@@ -204,12 +204,13 @@ if generate:
     )
 
     st.session_state["leads"] = df
-    st.success(f"Fetched {len(df)} leads.")
+    st.success(f"Fetched {len(df)} leads ✅")
 
 df = st.session_state["leads"]
 
 if not df.empty:
-    st.subheader("Results")
+    st.subheader("Results Table")
+
     gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_default_column(editable=False, sortable=True, filter=True)
     gb.configure_pagination()
@@ -236,22 +237,23 @@ if not df.empty:
     gb.configure_column("website", cellRenderer=link_js)
     gb.configure_column("google_maps", cellRenderer=link_js)
 
-    grid_response = AgGrid(
+    AgGrid(
         df,
         gridOptions=gb.build(),
         allow_unsafe_jscode=True,
         height=450,
         fit_columns_on_grid_load=True,
+        update_mode=GridUpdateMode.NO_UPDATE
     )
 
     if show_map:
         st.subheader("📍 Map View (Clustered)")
         m = folium.Map(location=[df["latitude"].mean(), df["longitude"].mean()], zoom_start=12)
-        marker_cluster = MarkerCluster().add_to(m)
+        cluster = MarkerCluster().add_to(m)
         for _, r in df.iterrows():
             if pd.notna(r["latitude"]) and pd.notna(r["longitude"]):
                 popup = f"<b>{r['name']}</b><br>{r['address']}<br><a href='{r['google_maps']}' target='_blank'>Google Maps</a>"
-                folium.Marker([r["latitude"], r["longitude"]], popup=popup).add_to(marker_cluster)
+                folium.Marker([r["latitude"], r["longitude"]], popup=popup).add_to(cluster)
         st_folium(m, width=700, height=450)
 
     out = BytesIO()
