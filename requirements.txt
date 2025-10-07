@@ -19,5 +19,6 @@ geopy==2.4.1
 openpyxl==3.1.2
 
 # ---- Data Grid ----
-st-aggrid==0.3.4
+streamlit-aggrid==1.0.5
+
 
