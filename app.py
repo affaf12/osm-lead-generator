@@ -138,12 +138,11 @@ if generate_button:
     lat, lon = coords
     queries = [q.strip() for q in queries_input.split(",")]
 
-    # Async fetch
     all_results = asyncio.run(fetch_all_osm(queries, lat, lon, radius, steps))
 
     if all_results:
         df = pd.DataFrame(all_results)
-        df = df.fillna("N/A").astype(str)  # All string values
+        df = df.fillna("N/A").astype(str)  # convert all columns to string
         df['lead_score'] = df.apply(score_lead, axis=1).astype(int)
         df = df.sort_values('lead_score', ascending=False).reset_index(drop=True)
         st.session_state.leads_df = df
@@ -170,28 +169,35 @@ if not st.session_state.leads_df.empty:
             filtered_df['website'].str.lower().str.contains(search_text)
         ]
 
-    # Make website/email clickable
-    cell_renderer_link = JsCode('''
+    filtered_df = filtered_df.astype(str)  # ensure all values are strings
+
+    # JsCode for clickable links
+    link_renderer = JsCode("""
     function(params) {
-        if(params.value && params.value != "N/A") {
+        if(params.value && params.value !== "N/A"){
             return `<a href="${params.value}" target="_blank">${params.value}</a>`;
         } else {
             return "N/A";
         }
     };
-    ''')
+    """)
+
+    # JsCode for colored lead_score
+    lead_score_style = JsCode("""
+    function(params) {
+        if(params.value >= 5){ return {'color':'black','backgroundColor':'#00ff99','fontWeight':'bold'} }
+        else if(params.value >= 3){ return {'color':'black','backgroundColor':'#ffff66','fontWeight':'bold'} }
+        else{ return {'color':'black','backgroundColor':'#ff5555','fontWeight':'bold'} }
+    };
+    """)
 
     gb = GridOptionsBuilder.from_dataframe(filtered_df)
     gb.configure_pagination(paginationAutoPageSize=True)
     gb.configure_side_bar()
     gb.configure_default_column(editable=False, filter=True, sortable=True)
-    gb.configure_column("lead_score", cellStyle=lambda x: {
-        'color':'black',
-        'backgroundColor':'#00ff99' if x >=5 else '#ffff66' if x>=3 else '#ff5555',
-        'fontWeight':'bold'
-    })
-    gb.configure_column("website", cellRenderer=cell_renderer_link)
-    gb.configure_column("emails", cellRenderer=cell_renderer_link)
+    gb.configure_column("website", cellRenderer=link_renderer)
+    gb.configure_column("emails", cellRenderer=link_renderer)
+    gb.configure_column("lead_score", cellStyle=lead_score_style)
     gridOptions = gb.build()
 
     AgGrid(
