@@ -1,7 +1,8 @@
 streamlit
 pandas
-geopy
-requests
+aiohttp
 nest_asyncio
+requests
+geopy
 openpyxl
 streamlit-aggrid
