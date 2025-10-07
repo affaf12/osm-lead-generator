@@ -14,9 +14,3 @@ secondaryBackgroundColor = '#F0F2F6'\n\
 textColor = '#000000'\n\
 font = 'sans serif'\n\
 " > ~/.streamlit/config.toml
-
-# Health check to keep Streamlit Cloud app awake
-while true; do
-  curl -s https://$REPL_SLUG.$REPL_OWNER.repl.co/ > /dev/null 2>&1
-  sleep 600
-done &
