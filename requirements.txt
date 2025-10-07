@@ -12,11 +12,12 @@ nest_asyncio==1.6.0
 
 # ---- Mapping & Geolocation ----
 folium==0.16.0
-streamlit-folium==0.18.0
+streamlit-folium==0.20.0
 geopy==2.4.1
 
 # ---- Excel Export ----
-openpyxl==3.1.5
+openpyxl==3.1.2
 
 # ---- Data Grid ----
-st-aggrid==0.3.4.post3
+st-aggrid==0.3.4
+
