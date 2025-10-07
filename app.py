@@ -1,4 +1,3 @@
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 import streamlit as st
 import pandas as pd
 import asyncio
@@ -9,16 +8,18 @@ from io import BytesIO
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 import nest_asyncio
-
-nest_asyncio.apply()
-st.set_page_config(layout="wide", page_title="🌐 OSM Lead Dashboard")
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 # -------------------------
 # Setup
 # -------------------------
+nest_asyncio.apply()
+st.set_page_config(layout="wide", page_title="🌐 OSM Lead Dashboard")
+
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
-geolocator = Nominatim(user_agent="StreamlitOSMPro/5.0")
+
+geolocator = Nominatim(user_agent="StreamlitOSMPro/6.0")
 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 
 FALLBACK_COORDINATES = {
@@ -39,7 +40,6 @@ def get_coordinates(location):
         coords_cache = json.load(open(cache_file, "r"))
     if location in coords_cache:
         return coords_cache[location]
-
     try:
         loc = geocode(location)
         if loc:
@@ -48,7 +48,6 @@ def get_coordinates(location):
             return loc.latitude, loc.longitude
     except:
         pass
-
     city_only = location.split(",")[0]
     try:
         loc = geocode(city_only)
@@ -58,7 +57,6 @@ def get_coordinates(location):
             return loc.latitude, loc.longitude
     except:
         pass
-
     return FALLBACK_COORDINATES.get(location, None)
 
 def score_lead(row):
@@ -71,8 +69,8 @@ def score_lead(row):
     return score
 
 async def fetch_osm(query, lat, lon, radius):
-    overpass_url = "https://overpass-api.de/api/interpreter"
-    query_text = f"""
+    url = "https://overpass-api.de/api/interpreter"
+    q = f"""
     [out:json][timeout:60];
     (
       node["amenity"="{query}"](around:{radius},{lat},{lon});
@@ -82,8 +80,8 @@ async def fetch_osm(query, lat, lon, radius):
     out center tags;
     """
     try:
-        response = requests.get(overpass_url, params={"data": query_text}, timeout=30)
-        data = response.json()
+        r = requests.get(url, params={"data": q}, timeout=30)
+        data = r.json()
         results = []
         for element in data.get("elements", []):
             tags = element.get("tags", {})
@@ -112,7 +110,7 @@ async def fetch_all_osm(queries, lat, lon, radius, steps):
 # -------------------------
 # UI
 # -------------------------
-st.title("🌐 OSM Lead Generator - AgGrid Table (Fast & Scrollable)")
+st.title("🌐 OSM Lead Generator - AgGrid Table")
 
 with st.expander("Search Parameters", expanded=True):
     col1, col2, col3 = st.columns([1,1,1])
@@ -130,7 +128,7 @@ if "leads_df" not in st.session_state:
     st.session_state.leads_df = None
 
 # -------------------------
-# Generate Data
+# Generate Leads
 # -------------------------
 if generate_button:
     coords = get_coordinates(f"{city_input}, {country_input}")
@@ -157,7 +155,7 @@ if st.session_state.leads_df is not None:
 
     # Filters
     min_score = st.slider("Minimum Lead Score", 0, 10, 1)
-    search_text = st.text_input("Search by Name or Website", value="").lower()
+    search_text = st.text_input("Search Name/Website", "").lower()
 
     filtered_df = st.session_state.leads_df[st.session_state.leads_df['lead_score'] >= min_score]
     if search_text:
@@ -171,18 +169,20 @@ if st.session_state.leads_df is not None:
     gb.configure_pagination(paginationAutoPageSize=True)
     gb.configure_side_bar()
     gb.configure_default_column(editable=False, filter=True, sortable=True)
-    gb.configure_column("lead_score", cellStyle=lambda x: {'color': 'black', 
-                                                         'backgroundColor': '#00ff99' if x >=5 else '#ffff66' if x >=3 else '#ff5555',
-                                                         'fontWeight':'bold'})
+    gb.configure_column("lead_score", cellStyle=lambda x: {
+        'color':'black',
+        'backgroundColor':'#00ff99' if x >=5 else '#ffff66' if x>=3 else '#ff5555',
+        'fontWeight':'bold'
+    })
     gridOptions = gb.build()
     AgGrid(filtered_df, gridOptions=gridOptions, height=500, fit_columns_on_grid_load=True, update_mode=GridUpdateMode.SELECTION_CHANGED)
 
-    # Download
+    # Download Excel
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         filtered_df.to_excel(writer, index=False)
     st.download_button(
-        "Download Excel File",
+        "Download Excel",
         output.getvalue(),
         file_name=f"OSM_Leads_{city_input}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
