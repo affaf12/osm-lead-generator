@@ -125,7 +125,7 @@ with st.expander("Search Parameters", expanded=True):
         generate_button = st.button("Generate Leads 🚀")
 
 if "leads_df" not in st.session_state:
-    st.session_state.leads_df = None
+    st.session_state.leads_df = pd.DataFrame()
 
 # -------------------------
 # Generate Leads
@@ -139,44 +139,44 @@ if generate_button:
     queries = [q.strip() for q in queries_input.split(",")]
 
     # Async fetch
-    loop = asyncio.get_event_loop()
-    all_results = loop.run_until_complete(fetch_all_osm(queries, lat, lon, radius, steps))
+    all_results = asyncio.run(fetch_all_osm(queries, lat, lon, radius, steps))
 
     if all_results:
         df = pd.DataFrame(all_results)
-        # Replace None with N/A for AgGrid safety
-        df = df.fillna("N/A")
+        df = df.fillna("N/A").astype(str)  # All string values
         df['lead_score'] = df.apply(score_lead, axis=1).astype(int)
         df = df.sort_values('lead_score', ascending=False).reset_index(drop=True)
         st.session_state.leads_df = df
     else:
         st.warning("No results found!")
-        st.session_state.leads_df = None
+        st.session_state.leads_df = pd.DataFrame()
 
 # -------------------------
 # Display AgGrid Table
 # -------------------------
-if st.session_state.leads_df is not None:
+if not st.session_state.leads_df.empty:
     st.subheader(f"🌟 Leads for {city_input}, {country_input}")
 
     # Filters
     min_score = st.slider("Minimum Lead Score", 0, 10, 1)
     search_text = st.text_input("Search Name/Website", "").lower()
 
-    filtered_df = st.session_state.leads_df[st.session_state.leads_df['lead_score'] >= min_score]
+    filtered_df = st.session_state.leads_df[
+        st.session_state.leads_df['lead_score'] >= min_score
+    ]
     if search_text:
         filtered_df = filtered_df[
             filtered_df['name'].str.lower().str.contains(search_text) |
             filtered_df['website'].str.lower().str.contains(search_text)
         ]
 
-    # Make website/email clickable in AgGrid
+    # Make website/email clickable
     cell_renderer_link = JsCode('''
     function(params) {
         if(params.value && params.value != "N/A") {
-            return `<a href="${params.value}" target="_blank">${params.value}</a>`
+            return `<a href="${params.value}" target="_blank">${params.value}</a>`;
         } else {
-            return "N/A"
+            return "N/A";
         }
     };
     ''')
