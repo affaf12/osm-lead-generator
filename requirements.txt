@@ -6,5 +6,5 @@ beautifulsoup4
 tldextract
 geopy
 nest_asyncio
-st-aggrid
+streamlit-aggrid
 openpyxl
