@@ -1,9 +1,7 @@
 streamlit
 pandas
-aiohttp
-nest_asyncio
-requests
-beautifulsoup4
-tldextract
 geopy
+requests
+nest_asyncio
 openpyxl
+streamlit-aggrid
