@@ -12,6 +12,7 @@ from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 import time
 import requests
+from io import BytesIO  # <- For in-memory Excel
 
 # -------------------------
 # Setup
@@ -35,10 +36,6 @@ FALLBACK_COORDINATES = {
 # Helper functions
 # -------------------------
 def get_coordinates(location, retries=3):
-    """
-    Get coordinates using geopy Nominatim with fallback to hard-coded values.
-    """
-    # Try geopy with retries
     for attempt in range(retries):
         try:
             loc = geocode(location)
@@ -47,7 +44,6 @@ def get_coordinates(location, retries=3):
         except:
             time.sleep(2 ** attempt)
 
-    # Fallback: try city only
     city_only = location.split(",")[0]
     for attempt in range(retries):
         try:
@@ -57,7 +53,6 @@ def get_coordinates(location, retries=3):
         except:
             time.sleep(2 ** attempt)
 
-    # Hard-coded fallback
     if location in FALLBACK_COORDINATES:
         return FALLBACK_COORDINATES[location]
 
@@ -197,7 +192,7 @@ async def main_osm(country, city, queries, radius_list, concurrency):
     location = f"{city}, {country}"
     coords = get_coordinates(location)
     if not coords:
-        st.stop()  # stop further execution if coordinates not found
+        st.stop()
     lat, lon = coords
 
     for query in queries:
@@ -257,8 +252,15 @@ if st.button("Generate Leads 🚀"):
         st.warning("No leads found!")
 
 if st.session_state.leads_df is not None:
+    # ------------------- Fix: Write Excel to BytesIO -------------------
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        st.session_state.leads_df.to_excel(writer, index=False)
+    processed_data = output.getvalue()
+
     st.download_button(
         "Download Excel File",
-        st.session_state.leads_df.to_excel(index=False),
-        file_name=f"OSM_Leads_{city_input}.xlsx"
+        processed_data,
+        file_name=f"OSM_Leads_{city_input}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
