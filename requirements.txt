@@ -7,3 +7,4 @@ geopy
 openpyxl
 streamlit-aggrid
 beautifulsoup4
+tldextract
