@@ -10,6 +10,8 @@ from bs4 import BeautifulSoup
 import tldextract
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
+import time
+import requests
 
 # -------------------------
 # Setup
@@ -19,24 +21,46 @@ geolocator = Nominatim(user_agent="StreamlitOSMPro/1.1 (muhammadaffaf746@gmail.c
 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 
 # -------------------------
+# Permanent coordinates fallback
+# -------------------------
+FALLBACK_COORDINATES = {
+    "Rome, Italy": (41.902782, 12.496366),
+    "Milan, Italy": (45.464203, 9.189982),
+    "London, UK": (51.507351, -0.127758),
+    "Paris, France": (48.856613, 2.352222),
+    # Add more cities as needed
+}
+
+# -------------------------
 # Helper functions
 # -------------------------
-def get_coordinates(location):
+def get_coordinates(location, retries=3):
     """
-    Get coordinates using geopy Nominatim with rate limiting and fallback.
+    Get coordinates using geopy Nominatim with fallback to hard-coded values.
     """
-    # First try full location
-    loc = geocode(location)
-    if loc:
-        return loc.latitude, loc.longitude
+    # Try geopy with retries
+    for attempt in range(retries):
+        try:
+            loc = geocode(location)
+            if loc:
+                return loc.latitude, loc.longitude
+        except:
+            time.sleep(2 ** attempt)
 
     # Fallback: try city only
     city_only = location.split(",")[0]
-    loc = geocode(city_only)
-    if loc:
-        return loc.latitude, loc.longitude
+    for attempt in range(retries):
+        try:
+            loc = geocode(city_only)
+            if loc:
+                return loc.latitude, loc.longitude
+        except:
+            time.sleep(2 ** attempt)
 
-    # Could not find coordinates
+    # Hard-coded fallback
+    if location in FALLBACK_COORDINATES:
+        return FALLBACK_COORDINATES[location]
+
     st.warning(f"[WARN] Could not get coordinates for '{location}'")
     return None
 
@@ -102,7 +126,7 @@ async def fetch_osm(query, lat, lon, radius, retries=3):
             return results
         except:
             if attempt < retries - 1:
-                import time; time.sleep(2)
+                time.sleep(2)
             else:
                 return []
     return []
