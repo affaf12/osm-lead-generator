@@ -1,0 +1,9 @@
+streamlit
+pandas
+aiohttp
+nest_asyncio
+requests
+beautifulsoup4
+tldextract
+geopy
+openpyxl
