@@ -9,42 +9,35 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 import tldextract
 from geopy.geocoders import Nominatim
-import requests
+from geopy.extra.rate_limiter import RateLimiter
 
 # -------------------------
 # Setup
 # -------------------------
 nest_asyncio.apply()
-geolocator = Nominatim(user_agent="StreamlitOSMPro/1.1")
+geolocator = Nominatim(user_agent="StreamlitOSMPro/1.1 (muhammadaffaf746@gmail.com)")
+geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 
 # -------------------------
 # Helper functions
 # -------------------------
-def get_coordinates(location, retries=5):
+def get_coordinates(location):
     """
-    Get latitude and longitude for a location using Nominatim OSM API.
-    Includes retries, exponential backoff, and proper User-Agent.
+    Get coordinates using geopy Nominatim with rate limiting and fallback.
     """
-    url = "https://nominatim.openstreetmap.org/search"
-    headers = {"User-Agent": "StreamlitOSMPro/1.1 (your_email@example.com)"}
-    params = {"q": location, "format": "json", "limit": 1}
+    # First try full location
+    loc = geocode(location)
+    if loc:
+        return loc.latitude, loc.longitude
 
-    for attempt in range(retries):
-        try:
-            response = requests.get(url, params=params, headers=headers, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            if data:
-                return float(data[0]["lat"]), float(data[0]["lon"])
-        except requests.exceptions.RequestException as e:
-            if attempt < retries - 1:
-                import time
-                wait = 2 ** attempt
-                print(f"Attempt {attempt+1} failed. Retrying in {wait}s...")
-                time.sleep(wait)
-            else:
-                print(f"Failed to get coordinates for '{location}': {e}")
-                return None
+    # Fallback: try city only
+    city_only = location.split(",")[0]
+    loc = geocode(city_only)
+    if loc:
+        return loc.latitude, loc.longitude
+
+    # Could not find coordinates
+    st.warning(f"[WARN] Could not get coordinates for '{location}'")
     return None
 
 def filter_valid_emails(emails):
@@ -127,7 +120,6 @@ async def fetch_website_data(session, website_url, retries=2):
                 async with session.get(page_url, timeout=10) as response:
                     text = await response.text()
                     emails += re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text)
-                    from bs4 import BeautifulSoup
                     soup = BeautifulSoup(text, "html.parser")
                     for a in soup.find_all("a", href=True):
                         href = a['href']
@@ -173,7 +165,6 @@ async def gather_website_data(websites, progress_bar, status_text, concurrency=5
 async def main_osm(country, city, queries, radius_list, concurrency):
     all_results = []
 
-    # OSM fetch progress
     total_tasks = len(queries) * len(radius_list)
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -182,8 +173,7 @@ async def main_osm(country, city, queries, radius_list, concurrency):
     location = f"{city}, {country}"
     coords = get_coordinates(location)
     if not coords:
-        st.warning(f"Could not get coordinates for {location}")
-        return None
+        st.stop()  # stop further execution if coordinates not found
     lat, lon = coords
 
     for query in queries:
@@ -201,7 +191,6 @@ async def main_osm(country, city, queries, radius_list, concurrency):
     df = pd.DataFrame(all_results)
     websites = df['website'].tolist()
 
-    # Website scraping progress
     progress_bar.progress(0)
     status_text.text("Scraping websites for emails and social links...")
     emails_list, social_list = await gather_website_data(websites, progress_bar, status_text, concurrency)
