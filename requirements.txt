@@ -1,12 +1,12 @@
 streamlit
 pandas
 requests
-folium
-streamlit-folium
-geopy
 nest_asyncio
 aiohttp
-beautifulsoup4
+folium
 tldextract
+geopy
+streamlit-folium
+beautifulsoup4
+st-aggrid
 openpyxl
-st-aggrid==1.0.4
